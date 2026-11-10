@@ -19,15 +19,23 @@ final class EQModel: ObservableObject {
     private let tap: SystemAudioTap
     private var tickerClear: DispatchWorkItem?
     private let defaults = UserDefaults.standard
+    /// Snapshot mode renders the window only: it never starts audio or writes settings.
+    private let snapshotMode = ProcessInfo.processInfo.environment["RETROEQ_SNAPSHOT"] != nil
 
     init() {
         engine = eq_create()
         tap = SystemAudioTap(engine: engine)
         tap.onDeviceChange = { [weak self] in self?.outputDeviceChanged() }
         load()
+        if snapshotMode, let name = ProcessInfo.processInfo.environment["RETROEQ_SNAPSHOT_PRESET"],
+           let preset = Preset.all.first(where: { $0.name == name }) {
+            gains = preset.gains
+            preamp = preset.preamp
+            presetName = preset.name
+            enabled = true
+        }
         pushToEngine()
         refreshOutputName()
-        let snapshotMode = ProcessInfo.processInfo.environment["RETROEQ_SNAPSHOT"] != nil
         if enabled && !snapshotMode { startAudio() }
     }
 
@@ -146,12 +154,13 @@ final class EQModel: ObservableObject {
             preamp = preset.preamp
             presetName = preset.name
             enabled = true
-            defaults.set(true, forKey: "enabled")
+            if !snapshotMode { defaults.set(true, forKey: "enabled") }
             save()
         }
     }
 
     private func save() {
+        guard !snapshotMode else { return }
         defaults.set(gains.map(Double.init), forKey: "gains")
         defaults.set(preamp, forKey: "preamp")
         defaults.set(presetName, forKey: "preset")

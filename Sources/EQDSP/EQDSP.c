@@ -26,6 +26,9 @@ struct EQEngine {
     _Atomic unsigned int version;
     _Atomic int resetRequested;
     _Atomic float peakL, peakR;
+    _Atomic double probeFreq;
+    _Atomic int probeReset;
+    _Atomic double probeIn, probeOut;
 
     // Audio-thread only.
     unsigned int seenVersion;
@@ -34,6 +37,8 @@ struct EQEngine {
     double z2[MAX_CHANNELS][EQ_BAND_COUNT];
     double preampTarget;
     double preampCurrent;
+    double probeRe, probeIm; // unit phasor
+    double inRe, inIm, outRe, outIm;
 };
 
 // RBJ audio-EQ-cookbook peaking filter.
@@ -83,6 +88,18 @@ void eq_request_reset(EQEngine *eq) { atomic_store(&eq->resetRequested, 1); }
 void eq_read_peaks(EQEngine *eq, float *left, float *right) {
     *left = atomic_exchange(&eq->peakL, 0.0f);
     *right = atomic_exchange(&eq->peakR, 0.0f);
+}
+
+void eq_probe_start(EQEngine *eq, double freq) {
+    atomic_store(&eq->probeFreq, freq);
+    atomic_store(&eq->probeIn, 0.0);
+    atomic_store(&eq->probeOut, 0.0);
+    atomic_store(&eq->probeReset, 1);
+}
+
+void eq_probe_read(EQEngine *eq, double *inMag, double *outMag) {
+    *inMag = atomic_load(&eq->probeIn);
+    *outMag = atomic_load(&eq->probeOut);
 }
 
 float eq_band_frequency(int band) {
@@ -185,6 +202,14 @@ OSStatus eq_ioproc(AudioObjectID inDevice,
     UInt32 frames = outFrames < inFrames ? outFrames : inFrames;
     if (frames == 0) return noErr;
 
+    if (atomic_exchange(&eq->probeReset, 0)) {
+        eq->probeRe = 1; eq->probeIm = 0;
+        eq->inRe = eq->inIm = eq->outRe = eq->outIm = 0;
+    }
+    double probeFreq = atomic_load(&eq->probeFreq);
+    double w = 2.0 * M_PI * probeFreq / atomic_load(&eq->sampleRate);
+    double stepRe = cos(w), stepIm = -sin(w);
+
     double pre = eq->preampCurrent;
     double step = (eq->preampTarget - pre) / (double)frames;
     float pkL = 0.0f, pkR = 0.0f;
@@ -205,6 +230,14 @@ OSStatus eq_ioproc(AudioObjectID inDevice,
             s[ch] = x;
         }
         float l = soft_clip(s[0]), r = soft_clip(s[1]);
+        if (probeFreq > 0) {
+            double x = inL.p[i * inL.stride];
+            eq->inRe += x * eq->probeRe;  eq->inIm += x * eq->probeIm;
+            eq->outRe += l * eq->probeRe; eq->outIm += l * eq->probeIm;
+            double re = eq->probeRe * stepRe - eq->probeIm * stepIm;
+            eq->probeIm = eq->probeRe * stepIm + eq->probeIm * stepRe;
+            eq->probeRe = re;
+        }
         if (fabsf(l) > pkL) pkL = fabsf(l);
         if (fabsf(r) > pkR) pkR = fabsf(r);
         if (nOut == 1) {
@@ -215,6 +248,13 @@ OSStatus eq_ioproc(AudioObjectID inDevice,
         }
     }
     eq->preampCurrent = eq->preampTarget;
+
+    if (probeFreq > 0) {
+        double norm = 1.0 / hypot(eq->probeRe, eq->probeIm);
+        eq->probeRe *= norm; eq->probeIm *= norm;
+        atomic_store(&eq->probeIn, hypot(eq->inRe, eq->inIm));
+        atomic_store(&eq->probeOut, hypot(eq->outRe, eq->outIm));
+    }
 
     // Flush denormals in the filter history.
     for (int ch = 0; ch < 2; ch++)

@@ -22,6 +22,11 @@ void eq_request_reset(EQEngine *eq);
 /// Peak output levels (linear, 0...1+) since the previous call.
 void eq_read_peaks(EQEngine *eq, float *left, float *right);
 
+/// Diagnostics: measures the live input and output magnitude at one frequency.
+/// eq_probe_start clears the accumulators; eq_probe_read returns their magnitudes.
+void eq_probe_start(EQEngine *eq, double freq);
+void eq_probe_read(EQEngine *eq, double *inMag, double *outMag);
+
 float eq_band_frequency(int band);
 
 /// Combined magnitude response of the band filters at `freq` (48 kHz reference), in dB.

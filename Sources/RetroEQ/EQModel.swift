@@ -64,6 +64,18 @@ final class EQModel: ObservableObject {
         flash("PRESET: \(preset.name.uppercased())")
     }
 
+    var isProcessing: Bool { tap.isRunning }
+
+    /// Puts back a saved state without the on-screen ticker (used by the self-test).
+    func restore(gains: [Float], preamp: Float, presetName: String, enabled: Bool) {
+        self.gains = gains
+        self.preamp = preamp
+        self.presetName = presetName
+        pushToEngine()
+        save()
+        if enabled != self.enabled { setEnabled(enabled) }
+    }
+
     func shutdown() {
         tap.stop()
         save()
